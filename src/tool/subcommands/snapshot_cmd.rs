@@ -9,7 +9,7 @@ use crate::cli_shared::snapshot;
 use crate::daemon::bundle::load_actor_bundles;
 use crate::db::car::forest::DEFAULT_FOREST_CAR_FRAME_SIZE;
 use crate::db::car::{AnyCar, ManyCar};
-use crate::db::{EthMappingsStore, MemoryDB, PersistentStore};
+use crate::db::{DbImpl, MemoryDB, PersistentStore};
 use crate::interpreter::{MessageCallbackCtx, VMTrace};
 use crate::ipld::stream_chain;
 use crate::networks::{ChainConfig, NetworkChain, butterflynet, calibnet, mainnet};
@@ -297,7 +297,8 @@ async fn validate_with_blockstore<BlockstoreT>(
     check_stateroots: u32,
 ) -> anyhow::Result<()>
 where
-    BlockstoreT: PersistentStore + EthMappingsStore + Send + Sync + 'static,
+    BlockstoreT: PersistentStore + Send + Sync + 'static,
+    Arc<BlockstoreT>: Into<DbImpl>,
 {
     if check_links != 0 {
         validate_ipld_links(root.clone(), &store, check_links).await?;
@@ -399,7 +400,8 @@ async fn validate_stateroots<DB>(
     epochs: u32,
 ) -> anyhow::Result<()>
 where
-    DB: PersistentStore + EthMappingsStore + Send + Sync + 'static,
+    DB: PersistentStore + Send + Sync + 'static,
+    Arc<DB>: Into<DbImpl>,
 {
     let chain_config = Arc::new(ChainConfig::from_chain(&network));
     let genesis = ts.genesis(db)?;

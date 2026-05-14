@@ -6,7 +6,6 @@ use std::{cell::Ref, sync::Arc};
 
 use crate::blocks::{CachingBlockHeader, Tipset};
 use crate::chain::{index::ChainIndex, store::ChainStore};
-use crate::db::EthMappingsStore;
 use crate::interpreter::errors::Error;
 use crate::interpreter::resolve_to_key_addr;
 use crate::networks::ChainConfig;
@@ -20,10 +19,7 @@ use crate::shim::{
 use crate::utils::encoding::from_slice_with_fallback;
 use anyhow::bail;
 use cid::Cid;
-use fvm_ipld_blockstore::{
-    Blockstore,
-    tracking::{BSStats, TrackingBlockstore},
-};
+use fvm_ipld_blockstore::tracking::{BSStats, TrackingBlockstore};
 use fvm_shared2::{
     address::Address,
     clock::ChainEpoch,
@@ -31,23 +27,23 @@ use fvm_shared2::{
 };
 use fvm2::externs::{Consensus, Externs, Rand};
 
-pub struct ForestExternsV2<DB> {
+pub struct ForestExternsV2 {
     rand: Box<dyn Rand>,
     heaviest_tipset: Tipset,
     epoch: ChainEpoch,
     root: Cid,
-    chain_index: ChainIndex<DB>,
+    chain_index: ChainIndex,
     chain_config: Arc<ChainConfig>,
     bail: AtomicBool,
 }
 
-impl<DB: Blockstore + Send + Sync + 'static> ForestExternsV2<DB> {
+impl ForestExternsV2 {
     pub fn new(
         rand: impl Rand + 'static,
         heaviest_tipset: Tipset,
         epoch: ChainEpoch,
         root: Cid,
-        chain_index: ChainIndex<DB>,
+        chain_index: ChainIndex,
         chain_config: Arc<ChainConfig>,
     ) -> Self {
         ForestExternsV2 {
@@ -61,10 +57,7 @@ impl<DB: Blockstore + Send + Sync + 'static> ForestExternsV2<DB> {
         }
     }
 
-    fn get_lookback_tipset_state_root_for_round(&self, height: ChainEpoch) -> anyhow::Result<Cid>
-    where
-        DB: EthMappingsStore,
-    {
+    fn get_lookback_tipset_state_root_for_round(&self, height: ChainEpoch) -> anyhow::Result<Cid> {
         let (_, st) = ChainStore::get_lookback_tipset_for_round(
             &self.chain_index,
             &self.chain_config,
@@ -78,10 +71,7 @@ impl<DB: Blockstore + Send + Sync + 'static> ForestExternsV2<DB> {
         &self,
         miner_addr: &Address,
         height: ChainEpoch,
-    ) -> anyhow::Result<(Address, i64)>
-    where
-        DB: EthMappingsStore,
-    {
+    ) -> anyhow::Result<(Address, i64)> {
         if height < self.epoch - self.chain_config.policy.chain_finality {
             bail!(
                 "cannot get worker key (current epoch: {}, height: {})",
@@ -91,11 +81,11 @@ impl<DB: Blockstore + Send + Sync + 'static> ForestExternsV2<DB> {
         }
 
         let prev_root = self.get_lookback_tipset_state_root_for_round(height)?;
-        let lb_state = StateTree::new_from_root(Arc::clone(self.chain_index.db()), &prev_root)?;
+        let lb_state = StateTree::new_from_root(self.chain_index.db(), &prev_root)?;
 
         let actor = lb_state
             .get_actor(&miner_addr.into())?
-            .ok_or_else(|| anyhow::anyhow!("actor not found {:?}", miner_addr))?;
+            .ok_or_else(|| anyhow::anyhow!("actor not found {miner_addr}"))?;
 
         let tbs = TrackingBlockstore::new(self.chain_index.db());
 
@@ -103,7 +93,7 @@ impl<DB: Blockstore + Send + Sync + 'static> ForestExternsV2<DB> {
 
         let worker = ms.info(&tbs)?.worker;
 
-        let state = StateTree::new_from_root(Arc::clone(self.chain_index.db()), &self.root)?;
+        let state = StateTree::new_from_root(self.chain_index.db(), &self.root)?;
 
         let addr = resolve_to_key_addr(&state, &tbs, &worker)?;
 
@@ -113,10 +103,7 @@ impl<DB: Blockstore + Send + Sync + 'static> ForestExternsV2<DB> {
         Ok((addr.into(), gas_used.round_up() as i64))
     }
 
-    fn verify_block_signature(&self, bh: &CachingBlockHeader) -> anyhow::Result<i64, Error>
-    where
-        DB: EthMappingsStore,
-    {
+    fn verify_block_signature(&self, bh: &CachingBlockHeader) -> anyhow::Result<i64, Error> {
         let (worker_addr, gas_used) =
             self.worker_key_at_lookback(&bh.miner_address.into(), bh.epoch)?;
 
@@ -130,9 +117,9 @@ impl<DB: Blockstore + Send + Sync + 'static> ForestExternsV2<DB> {
     }
 }
 
-impl<DB: Blockstore + EthMappingsStore + Send + Sync + 'static> Externs for ForestExternsV2<DB> {}
+impl Externs for ForestExternsV2 {}
 
-impl<DB> Rand for ForestExternsV2<DB> {
+impl Rand for ForestExternsV2 {
     fn get_chain_randomness(&self, round: ChainEpoch) -> anyhow::Result<[u8; 32]> {
         self.rand.get_chain_randomness(round)
     }
@@ -142,7 +129,7 @@ impl<DB> Rand for ForestExternsV2<DB> {
     }
 }
 
-impl<DB: Blockstore + EthMappingsStore + Send + Sync + 'static> Consensus for ForestExternsV2<DB> {
+impl Consensus for ForestExternsV2 {
     // See https://github.com/filecoin-project/lotus/blob/v1.18.0/chain/vm/fvm.go#L102-L216 for reference implementation
     fn verify_consensus_fault(
         &self,
